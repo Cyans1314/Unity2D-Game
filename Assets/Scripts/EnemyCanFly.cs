@@ -1,111 +1,129 @@
+/*
+ * Script Name: EnemyCanFly.cs
+ * Author:      Cyans
+ * Affiliation: Chang'an University
+ * Date:        November 14, 2025
+ * 
+ * Description: Flying enemy  with hover physics, patrol behavior, combat system,
+ *              and retreat mechanics. Uses spring-based hovering simulation and
+ *              smooth movement for realistic flight behavior.
+ */
+
 using System.Collections;
 using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody2D), typeof(Animator))]
 public class EnemyCanFly : MonoBehaviour {
 
-    [Header("--- 基础数值 ---")]
-    [Tooltip("怪物的最大生命值")]
+    #region --- Inspector Settings ---
+
+    [Header("Base Stats")]
+    [Tooltip("Max health points")]
     public float maxHealth = 50f;
     
-    [Tooltip("怪物巡逻时的飞行速度")]
+    [Tooltip("Patrol flight speed")]
     public float moveSpeed = 4f; 
 
-    [Tooltip("追击玩家时的速度倍率")]
+    [Tooltip("Speed multiplier when chasing player")]
     public float chaseSpeedMultiplier = 1.5f;
     
-    [Tooltip("怪物的基础攻击力")]
+    [Tooltip("Base attack damage")]
     public float damage = 10f;
     
-    [Tooltip("巡逻范围矩形 X为宽度 Y为高度")]
+    [Tooltip("Patrol area rectangle (X=width, Y=height)")]
     public Vector2 patrolBoxSize = new Vector2(10f, 6f);
     
-    [Tooltip("是否启用巡逻行为")]
+    [Tooltip("Enable patrol behavior")]
     public bool canPatrol = true;
 
-    [Header("--- 飞行物理与手感 ---")]
-    [Tooltip("移动平滑度 数值越大惯性越大")]
+    [Header("Flight Physics")]
+    [Tooltip("Movement smoothness (higher = more inertia)")]
     public float movementSmoothTime = 0.5f;
 
-    [Tooltip("悬浮呼吸幅度")]
+    [Tooltip("Hover bobbing amplitude")]
     public float hoverBobAmount = 0.5f;
 
-    [Tooltip("悬浮呼吸频率")]
+    [Tooltip("Hover bobbing frequency")]
     public float hoverBobSpeed = 2.0f;
 
-    [Tooltip("悬浮弹力强度")]
+    [Tooltip("Hover spring force strength")]
     public float springStrength = 1000f; 
     
-    [Tooltip("悬浮阻尼")]
+    [Tooltip("Hover damping")]
     public float springDamping = 15f;
     
-    [Tooltip("战斗时悬停高度")]
+    [Tooltip("Combat hover height")]
     public float hoverHeight = 3.5f;
 
-    [Header("--- 战斗逻辑配置 ---")]
-    [Tooltip("近战贴脸距离")]
+    [Header("Combat Configuration")]
+    [Tooltip("Melee range distance")]
     public float closeRange = 1.0f;   
     
-    [Tooltip("开始追击与盘旋的判定距离")]
+    [Tooltip("Chase and hover trigger distance")]
     public float farRange = 7.0f;     
     
-    [Tooltip("普攻连打间隔")]
+    [Tooltip("Combo attack interval")]
     public float comboInterval = 0.4f; 
     
-    [Tooltip("连招结束后的撤离飞行时间")]
+    [Tooltip("Retreat flight duration after combo")]
     public float retreatDuration = 2.0f; 
 
-    [Header("--- 其他配置 ---")]
-    [Tooltip("脱战后的每秒回血量")]
+    [Header("Misc Settings")]
+    [Tooltip("HP regen per second out of combat")]
     public float healRate = 5f;
     
-    [Tooltip("攻击判定的中心点")]
+    [Tooltip("Attack detection center point")]
     public Transform attackPoint;
     
-    [Tooltip("攻击判定的圆形半径")]
+    [Tooltip("Attack detection radius")]
     public float hitRadius = 0.6f;
     
-    [Tooltip("玩家所在的图层")]
+    [Tooltip("Player layer mask")]
     public LayerMask playerLayer;
 
-    [Tooltip("地面图层 用于检测死亡落地")]
+    [Tooltip("Ground layer for death landing detection")]
     public LayerMask groundLayer;
 
-    // 内部变量
+    #endregion
+
+    #region --- Internal State ---
+
+    // References
     private Transform player;   
     private Animator ani;       
     private Rigidbody2D rb;     
     
+    // State Variables
     private Vector2 startPoint; 
     private float currentHealth; 
-    
     private float nextActionTime = 0f; 
     
-    // 物理悬浮变量
+    // Hover physics variables
     private float targetHeightY; 
     private float smoothedHeightY;
 
-    // 平滑移动速度缓存
+    // Smooth movement velocity cache
     private float currentVelocityX; 
 
-    // 巡逻变量
+    // Patrol variables
     private Vector2 currentPatrolTarget;
     private float patrolWaitTime = 0f;
 
-    // 状态锁
+    // Status locks
     private bool isRetreating = false;
     private float retreatEndTime = 0f;
 
+    // Status Flags
     private bool isDead = false;         
     private bool isFallingToDie = false; 
     private bool isFacingRight = false; 
     private int comboCount = 0; 
-
     private bool initialFacingRight; 
 
-    /**
-    * 初始化组件与状态
-    */
+    #endregion
+
+    #region --- Unity Lifecycle ---
+
     void Start() {
         currentHealth = maxHealth;
         startPoint = transform.position;
@@ -120,7 +138,7 @@ public class EnemyCanFly : MonoBehaviour {
         if (p != null) {
             player = p.transform;
         } else {
-            Debug.LogWarning("[EnemyCanFly] 警告：未找到 Player 标签的物体。");
+            Debug.LogWarning("[EnemyCanFly] Warning: Player tag not found.");
         }
 
         if (transform.localScale.x < 0) {
@@ -132,43 +150,32 @@ public class EnemyCanFly : MonoBehaviour {
         initialFacingRight = isFacingRight;
     }
 
-    /**
-    * 物理计算循环
-    * 这里处理核心的悬浮力计算
-    */
     void FixedUpdate() {
-        // 如果正在坠落等待死亡 或者是彻底死亡 都不再施加悬浮力
+        // If falling to death or already dead, stop applying hover force
         if (isDead || isFallingToDie) return;
 
-        // 垂直移动平滑处理
-        // 让物理锚点平滑移动 避免垂直方向的瞬移感
         smoothedHeightY = Mathf.MoveTowards(smoothedHeightY, targetHeightY, moveSpeed * Time.fixedDeltaTime);
 
-        // 呼吸感计算
-        // 使用正弦波叠加一个微小的上下浮动 模拟生物在空中悬停时的不稳定性
+        // Use sine wave to add small up-down float, simulating creature instability while hovering
         float bobbingOffset = Mathf.Sin(Time.time * hoverBobSpeed) * hoverBobAmount;
         float finalTargetY = smoothedHeightY + bobbingOffset;
 
-        // 弹簧力计算
+        // Spring force calculation
         float forceY = 0f;
         float yDifference = finalTargetY - transform.position.y;
 
-        // 应用胡克定律
         float springForce = yDifference * springStrength;
-        // 应用阻尼力防止抖动
+        // Apply damping force to prevent shaking
         float dampingForce = -rb.velocity.y * springDamping;
 
-        // 加上重力补偿
+        // Add gravity compensation
         forceY = springForce + dampingForce + (rb.mass * Mathf.Abs(Physics2D.gravity.y) * rb.gravityScale);
 
         rb.AddForce(new Vector2(0f, forceY));
     }
 
-    /**
-    * 逻辑更新循环
-    */
     void Update() {
-        // 死亡状态下停止逻辑更新
+        // Stop logic update when dead
         if (isDead || isFallingToDie || player == null) return;
 
         AnimatorStateInfo stateInfo = ani.GetCurrentAnimatorStateInfo(0);
@@ -202,18 +209,16 @@ public class EnemyCanFly : MonoBehaviour {
         }
     }
 
-    /**
-    * 通用平滑移动函数
-    * 使用 SmoothDamp 模拟惯性移动
-    */
+    #endregion
+
+    #region ---  Logic ---
+
+    // Generic smooth movement function - uses SmoothDamp to simulate inertia movement
     private void SmoothMoveToX(float targetX, float speed) {
         float newX = Mathf.SmoothDamp(transform.position.x, targetX, ref currentVelocityX, movementSmoothTime, speed);
         transform.position = new Vector2(newX, transform.position.y);
     }
 
-    /**
-    * 战斗状态决策逻辑
-    */
     private void HandleCombatLogic(float dist) {
         if (dist > farRange) {
             if (comboCount != 0) comboCount = 0; 
@@ -229,9 +234,6 @@ public class EnemyCanFly : MonoBehaviour {
         }
     }
 
-    /**
-    * 执行近战连招
-    */
     private void PerformComboLogic() {
         if (comboCount < 2) {
             ani.SetTrigger("isAttack1");
@@ -245,32 +247,23 @@ public class EnemyCanFly : MonoBehaviour {
         }
     }
 
-    /**
-    * 触发撤离
-    */
     private void TriggerRetreat() {
         isRetreating = true;
         retreatEndTime = Time.time + retreatDuration;
     }
 
-    /**
-    * 执行撤离飞行
-    */
     private void PerformRetreat() {
         ani.SetBool("isRun", true);
 
         float retreatDirX = isFacingRight ? -1f : 1f;
         float targetX = transform.position.x + retreatDirX * 5f;
         
-        // 撤离时稍微加速
+        // Speed up slightly during retreat
         SmoothMoveToX(targetX, moveSpeed * 1.2f);
 
         targetHeightY = startPoint.y + hoverHeight;
     }
 
-    /**
-    * 脱战与巡逻逻辑
-    */
     private void HandlePeaceState() {
         comboCount = 0; 
 
@@ -286,10 +279,7 @@ public class EnemyCanFly : MonoBehaviour {
         }
     }
 
-    /**
-    * 追逐移动
-    * 战斗状态下应用加速倍率
-    */
+    // Chase movement - apply speed multiplier during combat
     private void ChasePlayer(bool isHovering) {
         ani.SetBool("isRun", true);
         
@@ -299,14 +289,12 @@ public class EnemyCanFly : MonoBehaviour {
         if (isHovering) {
             targetHeightY = player.position.y + hoverHeight;
         } else {
-            // 俯冲攻击时稍微留出一点高度 防止穿模
+            // Leave some height during dive attack to prevent clipping
             targetHeightY = player.position.y + 0.5f;
         }
     }
 
-    /**
-    * 矩形随机巡逻
-    */
+    // Rectangular random patrol
     private void PatrolRect() {
         ani.SetBool("isRun", true);
 
@@ -320,7 +308,7 @@ public class EnemyCanFly : MonoBehaviour {
                 GetNewPatrolPoint();
             }
         } else {
-            // 巡逻使用普通速度
+            // Use normal speed for patrol
             SmoothMoveToX(currentPatrolTarget.x, moveSpeed);
             targetHeightY = currentPatrolTarget.y;
 
@@ -329,21 +317,18 @@ public class EnemyCanFly : MonoBehaviour {
         }
     }
 
-    /**
-    * 获取新巡逻点
-    * 包含防折返逻辑
-    */
+    // Get new patrol point - includes anti-backtrack logic
     private void GetNewPatrolPoint() {
         Vector2 candidatePoint = Vector2.zero;
         int attempts = 0;
         
-        // 尝试找一个距离当前位置足够远的点 防止原地鬼畜
+        // Try to find a point far enough from current position to prevent jittering
         while (attempts < 10) {
             float randomX = Random.Range(-patrolBoxSize.x, patrolBoxSize.x);
             float randomY = Random.Range(-patrolBoxSize.y, patrolBoxSize.y);
             candidatePoint = startPoint + new Vector2(randomX, randomY);
             
-            // 如果新点距离当前位置足够远 则接受
+            // Accept if new point is far enough from current position
             if (Vector2.Distance(transform.position, candidatePoint) > 3.0f) {
                 break;
             }
@@ -354,9 +339,6 @@ public class EnemyCanFly : MonoBehaviour {
         patrolWaitTime = Time.time + Random.Range(2.0f, 4.0f);
     }
 
-    /**
-    * 返回出生点
-    */
     private void ReturnToStart() {
         float dist = Vector2.Distance(transform.position, startPoint);
         
@@ -389,16 +371,13 @@ public class EnemyCanFly : MonoBehaviour {
         transform.localScale = scale;
     }
 
-    public void CheckHit() {
-        Collider2D hitPlayer = Physics2D.OverlapCircle(attackPoint.position, hitRadius, playerLayer);
-        if (hitPlayer != null) hitPlayer.GetComponent<Player>()?.onDamage(damage);
-    }
+    #endregion
 
-    public void CheckHit2() {
-        Collider2D hitPlayer = Physics2D.OverlapCircle(attackPoint.position, hitRadius + 0.2f, playerLayer);
-        if (hitPlayer != null) hitPlayer.GetComponent<Player>()?.onDamage(damage * 1.5f);
-    }
+    #region --- Public & Animation Events ---
 
+    /// <summary>
+    /// Take damage and interrupt current action.
+    /// </summary>
     public void onDamage(float dmg) {
         if (isDead || isFallingToDie) return;
         
@@ -413,42 +392,48 @@ public class EnemyCanFly : MonoBehaviour {
         if (currentHealth <= 0) Die();
     }
 
-    /**
-    * 死亡第一阶段 失去动力坠落
-    */
+    // Called via Animation Event
+    public void CheckHit() {
+        Collider2D hitPlayer = Physics2D.OverlapCircle(attackPoint.position, hitRadius, playerLayer);
+        if (hitPlayer != null) hitPlayer.GetComponent<Player>()?.onDamage(damage);
+    }
+
+    // Called via Animation Event
+    public void CheckHit2() {
+        Collider2D hitPlayer = Physics2D.OverlapCircle(attackPoint.position, hitRadius + 0.2f, playerLayer);
+        if (hitPlayer != null) hitPlayer.GetComponent<Player>()?.onDamage(damage * 1.5f);
+    }
+
+    // Death phase 1: Lose power and fall
     private void Die() {
         isFallingToDie = true;
         ani.SetBool("isRun", false); 
         rb.velocity = Vector2.zero;
         
-        // 稍微给一点向上的初速度 模拟被击落的效果
+        // Give slight upward velocity to simulate being shot down
         rb.AddForce(Vector2.up * 5f, ForceMode2D.Impulse);
         
-        // 确保重力生效 让它掉下去
+        // Ensure gravity takes effect to make it fall
         rb.gravityScale = 3.0f; 
     }
 
-    /**
-    * 碰撞检测 用于检测尸体落地
-    */
+    // Collision detection - used to detect corpse landing
     private void OnCollisionEnter2D(Collision2D collision) {
-        // 如果正在坠落 并且撞到了地面
+        // If falling and hit the ground
         if (isFallingToDie && !isDead) {
-            // 检查碰撞体是否属于地面图层
+            // Check if collider belongs to ground layer
             if (((1 << collision.gameObject.layer) & groundLayer) != 0) {
                 PerformFinalDeath();
             }
         }
     }
 
-    /**
-    * 死亡第二阶段 落地播放动画并销毁
-    */
+    // Death phase 2: Land, play animation and destroy
     private void PerformFinalDeath() {
         isDead = true;
         ani.SetBool("isDead", true);
         
-        // 停止物理运动 防止尸体滑行
+        // Stop physics movement to prevent corpse sliding
         rb.velocity = Vector2.zero;
         rb.bodyType = RigidbodyType2D.Static; 
         
@@ -456,6 +441,10 @@ public class EnemyCanFly : MonoBehaviour {
 
         Destroy(gameObject, 2f);
     }
+
+    #endregion
+
+    #region --- Debug ---
 
     void OnDrawGizmosSelected() {
         if (attackPoint != null) {
@@ -467,4 +456,6 @@ public class EnemyCanFly : MonoBehaviour {
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireCube(center, new Vector3(patrolBoxSize.x * 2, patrolBoxSize.y * 2, 0));
     }
+
+    #endregion
 }

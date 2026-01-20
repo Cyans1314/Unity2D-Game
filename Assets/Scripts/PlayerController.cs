@@ -1,3 +1,14 @@
+/*
+ * Script Name: PlayerController.cs
+ * Author:      Cyans
+ * Affiliation: Chang'an University
+ * Date:        November 12, 2025
+ * 
+ * Description: Main player controller handling movement, jumping, dashing, 
+ *              combat, health system, and audio feedback. Supports double jump,
+ *              dash mechanics, combo attacks, and respawn system.
+ */
+
 using System.Collections;
 using System.Collections.Generic;
 using Unity.VisualScripting;
@@ -6,22 +17,17 @@ using UnityEngine.InputSystem;
 using UnityEngine.UI; 
 
 public class Player : MonoBehaviour {
-    // 核心组件
-    private Rigidbody2D rig;
-    private Animator ani; 
 
-    // 出生点
+    #region --- Inspector Settings ---
+
     public Transform spawnPoint;
 
-    // UI
-    [Header("--- UI ---")]
+    [Header("UI")]
     public Slider healthBar; 
 
-    // 音效
-    [Header("--- 音效 ---")]
-    public AudioSource audioSource; // 喇叭 A (负责短音效)
+    [Header("Audio")]
+    public AudioSource audioSource;
     
-    // 喇叭 B (专门负责跑步，代码自动生成，不用拖)
     private AudioSource runAudioSource; 
 
     public AudioClip jumpClip;      
@@ -29,23 +35,62 @@ public class Player : MonoBehaviour {
     public AudioClip attack1Clip;   
     public AudioClip attack2Clip;   
     public AudioClip deathClip;     
-    public AudioClip runClip;       
+    public AudioClip runClip;
+
+    public float moveSpeed = 3f;
+    private float[] jumpForces = { 5.2f, 4.2f }; 
+    public Transform groundPoint;
+    public LayerMask groundMask;
+
+    public float dashSpeed = 15f;    
+    public float dashTime = 0.2f;   
+    public float dashCooldown = 1f;
+
+    public Transform attackPoint;
+    public float attackRange = 1.5f;
+    public LayerMask monsterMask;
+    public float normalDamage = 10f;      
+    public float dashAttackDamage = 30f;
+
+    [Header("Health")]
+    public float maxHealth = 100f;
+
+    #endregion
+
+    #region --- Internal State ---
+
+    // Core components
+    private Rigidbody2D rig;
+    private Animator ani; 
+
+    // State Variables
+    private float InputX;
+    private bool isFlip = false; 
+    private bool isGround; 
+    private int jumpCount;
+    private bool isDashing = false;  
+    private bool canDash = true;
+    private float currentHealth;
+    private bool isDead = false;
+
+    #endregion
+
+    #region --- Unity Lifecycle ---
 
     public void Start() {
         rig = GetComponent<Rigidbody2D>();
         ani = GetComponent<Animator>();
         
-        //  获取主喇叭 (喇叭 A)
+        // Get main speaker (Speaker A)
         if (audioSource == null) audioSource = GetComponent<AudioSource>();
 
-        // 自动创建一个“副喇叭” (喇叭 B) 专门放跑步声
         runAudioSource = gameObject.AddComponent<AudioSource>();
         runAudioSource.clip = runClip;
-        runAudioSource.loop = true; // 跑步声是循环的
-        runAudioSource.volume = audioSource.volume; // 音量和主喇叭一样
+        runAudioSource.loop = true; // Running sound loops
+        runAudioSource.volume = audioSource.volume; // Same volume as main speaker
         runAudioSource.playOnAwake = false;
 
-        // 初始化状态
+        // Initialize state
         jumpCount = 0;
         currentHealth = maxHealth; 
 
@@ -62,7 +107,7 @@ public class Player : MonoBehaviour {
     public void Update() {
         if (isDead) {
             rig.velocity = Vector2.zero;
-            // 死了只停喇叭 B (跑步声)
+            // When dead, only stop Speaker B (running sound)
             if (runAudioSource.isPlaying) runAudioSource.Stop();
             return; 
         }
@@ -83,7 +128,7 @@ public class Player : MonoBehaviour {
             ani.SetBool("isGround", true); 
             ani.SetBool("isRun", false);
 
-            // 攻击时只停喇叭 B (跑步声)，不影响挥刀声
+            // When attacking, only stop Speaker B
             if (runAudioSource.isPlaying) runAudioSource.Stop();
         } else {
             rig.velocity = new Vector2(moveSpeed * InputX, rig.velocity.y);
@@ -103,16 +148,16 @@ public class Player : MonoBehaviour {
                 }
             }
 
-            // 跑步音效控制 (操作喇叭 B)
+            // Running sound control
             if (isGround && Mathf.Abs(rig.velocity.x) > 0.1f) {
-                // 如果没在跑，就开始跑
+                // If not running, start running
                 if (!runAudioSource.isPlaying) {
-                    runAudioSource.clip = runClip; // 确保是跑步声
+                    runAudioSource.clip = runClip; // Ensure it's running sound
                     runAudioSource.Play();
                 }
             } 
             else {
-                // 停下来或跳起来 -> 停止喇叭 B
+                // Stop or jump -> stop Speaker B
                 if (runAudioSource.isPlaying) {
                     runAudioSource.Stop();
                 }
@@ -120,30 +165,14 @@ public class Player : MonoBehaviour {
         }
     }
 
-    // 音效播放工具 (使用喇叭 A)
-    public void PlaySound(AudioClip clip) {
-        if (clip != null && audioSource != null) {
-            audioSource.PlayOneShot(clip);
-        }
-    }
+    #endregion
 
-    /******** 移动模块 ***********/
-    public float moveSpeed = 3f;
-    private float InputX;
-    private bool isFlip = false; 
+    #region --- Input Handlers ---
 
     public void Move(InputAction.CallbackContext context) {
         if (isDead) return; 
         InputX = context.ReadValue<Vector2>().x;
     }
-
-
-    /******** 跳跃与地面模块 ***********/
-    private float[] jumpForces = { 5.2f, 4.2f }; 
-    public Transform groundPoint;
-    public LayerMask groundMask;
-    private bool isGround; 
-    private int jumpCount;
 
     public void Jump(InputAction.CallbackContext context) {
         if (isDead) return; 
@@ -151,22 +180,14 @@ public class Player : MonoBehaviour {
             if (isGround && jumpCount == 0) {
                 rig.velocity = new Vector2(rig.velocity.x, jumpForces[0]);
                 jumpCount++; 
-                PlaySound(jumpClip); // 喇叭 A 响
+                PlaySound(jumpClip); // Speaker A plays
             } else if (!isGround && jumpCount == 1) {
                 rig.velocity = new Vector2(rig.velocity.x, jumpForces[1]);
                 jumpCount++; 
-                PlaySound(jumpClip); // 喇叭 A 响
+                PlaySound(jumpClip); // Speaker A plays
             }
         }
     }
-
-
-    /******** 冲刺模块 ***********/
-    public float dashSpeed = 15f;    
-    public float dashTime = 0.2f;   
-    public float dashCooldown = 1f;  
-    private bool isDashing = false;  
-    private bool canDash = true;     
 
     public void Dash(InputAction.CallbackContext context) {
         if (isDead) return; 
@@ -175,15 +196,37 @@ public class Player : MonoBehaviour {
         }
     }
 
+    public void Attack(InputAction.CallbackContext context) {
+        if (isDead) return; 
+        if (context.performed) {
+            ani.SetBool("isDashAttack", false);
+            ani.SetBool("isAttack", true);        
+            
+            // To solve sound overlap from fast input, no longer play directly here, use animation event instead
+        }
+    }
+
+    public void DashAttack(InputAction.CallbackContext context) {
+        if (isDead) return; 
+        if (context.performed) {
+            ani.SetBool("isAttack", false); 
+            ani.SetBool("isDashAttack", true);
+        }
+    }
+
+    #endregion
+
+    #region --- Coroutines ---
+
     private IEnumerator DashCoroutine() {
         isDashing = true;
         canDash = false;
         ani.SetBool("isDash", true); 
         
-        // 冲刺时停跑步声 (喇叭 B)
+        // Stop running sound during dash (Speaker B)
         if (runAudioSource.isPlaying) runAudioSource.Stop();
         
-        PlaySound(dashClip); // 冲刺声 (喇叭 A)
+        PlaySound(dashClip); // Dash sound (Speaker A)
 
         float dir = isFlip ? -1f : 1f; 
         rig.velocity = new Vector2(dir * dashSpeed, 0f);
@@ -198,117 +241,6 @@ public class Player : MonoBehaviour {
         canDash = true;
     }
 
-
-    /******** 攻击模块 ***********/
-    public Transform attackPoint;
-    public float attackRange = 1.5f;
-    public LayerMask monsterMask;
-    public float normalDamage = 10f;      
-    public float dashAttackDamage = 30f;
-
-    public void Attack(InputAction.CallbackContext context) {
-        if (isDead) return; 
-        if (context.performed) {
-            ani.SetBool("isDashAttack", false);
-            ani.SetBool("isAttack", true);        
-            
-            // PlaySound(attack1Clip); // 为了解决手速快导致声音重叠，这里不再直接播放，改用动画事件触发
-        }
-    }  
-
-    // 供动画事件调用的方法
-    public void PlayAttack1Sound() {
-        PlaySound(attack1Clip);
-    }
-
-    public void DashAttack(InputAction.CallbackContext context) {
-        if (isDead) return; 
-        if (context.performed) {
-            ani.SetBool("isAttack", false); 
-            ani.SetBool("isDashAttack", true);
-        }
-    }
-
-    public void PlayAttack2Sound() {
-        PlaySound(attack2Clip); // 喇叭 A 响
-    }
-
-    //检测攻击范围内是否有敌人
-    public void CheckAttack() {
-        Collider2D[] detectedObjects = Physics2D.OverlapCircleAll(attackPoint.position, attackRange, monsterMask);
-        
-        bool isDashAtk = ani.GetBool("isDashAttack");
-
-        float currentDamage = isDashAtk ? dashAttackDamage : normalDamage;
-
-        foreach (Collider2D collider in detectedObjects) {
-            Debug.Log("击中: " + collider.gameObject.name);
-            collider.gameObject.SendMessage("onDamage", currentDamage);
-        } 
-    }
-
-    // 结束攻击状态
-    public void EndAttack() {
-        ani.SetBool("isAttack", false);
-        ani.SetBool("isDashAttack", false);
-    }
-
-
-    /******** 受伤与死亡模块 ***********/
-    [Header("生命值属性")]
-    public float maxHealth = 100f; 
-    private float currentHealth;
-    private bool isDead = false; 
-
-    public void onDamage(float damage) {
-        if (isDead) return;
-
-        currentHealth -= damage;
-        Debug.Log("Player受到了" + damage + "点伤害，当前血量：" + currentHealth);
-
-        if (healthBar != null) {
-            healthBar.value = currentHealth;
-        }
-
-        if (currentHealth <= 0) {
-            Die();
-        } else {
-            ani.SetTrigger("isHurt");
-        }
-    }
-
-    private void Die() {
-        // 防止还没死的逻辑继续运行
-        StopAllCoroutines(); // 强制停止冲刺协程！
-        isDashing = false;   // 强制重置冲刺状态
-
-        isDead = true;
-        ani.SetBool("isDead", true); 
-        
-        // 死亡时清空所有动作指令，防止动画鬼畜
-        ani.SetBool("isAttack", false);
-        ani.SetBool("isDashAttack", false);
-        ani.SetBool("isDash", false);
-        ani.SetBool("isRun", false);
-        ani.ResetTrigger("isHurt");
-        ani.SetBool("isGround", true); // 防止空中死亡卡住
-        ani.SetFloat("yVelocity", 0);
-
-        rig.velocity = Vector2.zero;
-        rig.bodyType = RigidbodyType2D.Kinematic; 
-
-        // 死了停跑步声 (喇叭 B)
-        if (runAudioSource.isPlaying) runAudioSource.Stop();
-
-        PlaySound(deathClip); // 死亡声 (喇叭 A)
-
-        Debug.Log("角色死亡 - Game Over");
-
-        StartCoroutine(RespawnCo());
-    }
-
-
-    // 复活
     private IEnumerator RespawnCo() {
         yield return new WaitForSeconds(1.1f);
 
@@ -334,16 +266,111 @@ public class Player : MonoBehaviour {
         canDash = true; 
         isDashing = false; 
 
-
         isDead = false;
 
-        Debug.Log("复活完成！状态全满！");
+        Debug.Log("Respawn complete! Full health!");
     }
 
-    //辅助绘图 (用于在Scene窗口查看攻击范围和地面检测)
+    #endregion
+
+    #region --- Public & Animation Events ---
+
+    // Sound playback utility
+    public void PlaySound(AudioClip clip) {
+        if (clip != null && audioSource != null) {
+            audioSource.PlayOneShot(clip);
+        }
+    }
+
+    // Called by animation event
+    public void PlayAttack1Sound() {
+        PlaySound(attack1Clip);
+    }
+
+    // Called by animation event
+    public void PlayAttack2Sound() {
+        PlaySound(attack2Clip); // Speaker A plays
+    }
+
+    // Check if there are enemies within attack range
+    public void CheckAttack() {
+        Collider2D[] detectedObjects = Physics2D.OverlapCircleAll(attackPoint.position, attackRange, monsterMask);
+        
+        bool isDashAtk = ani.GetBool("isDashAttack");
+
+        float currentDamage = isDashAtk ? dashAttackDamage : normalDamage;
+
+        foreach (Collider2D collider in detectedObjects) {
+            Debug.Log("Hit: " + collider.gameObject.name);
+            collider.gameObject.SendMessage("onDamage", currentDamage);
+        } 
+    }
+
+    // End attack state
+    public void EndAttack() {
+        ani.SetBool("isAttack", false);
+        ani.SetBool("isDashAttack", false);
+    }
+
+    /// <summary>
+    /// Apply damage to player.
+    /// </summary>
+    public void onDamage(float damage) {
+        if (isDead) return;
+
+        currentHealth -= damage;
+        Debug.Log("Player took " + damage + " damage, current health: " + currentHealth);
+
+        if (healthBar != null) {
+            healthBar.value = currentHealth;
+        }
+
+        if (currentHealth <= 0) {
+            Die();
+        } else {
+            ani.SetTrigger("isHurt");
+        }
+    }
+
+    #endregion
+
+    #region --- Helper Methods ---
+
+    private void Die() {
+        // Prevent logic from continuing before death
+        StopAllCoroutines(); // Force stop dash coroutine!
+        isDashing = false;   // Force reset dash state
+
+        isDead = true;
+        ani.SetBool("isDead", true); 
+        
+        // Clear all action commands on death to prevent animation glitches
+        ani.SetBool("isAttack", false);
+        ani.SetBool("isDashAttack", false);
+        ani.SetBool("isDash", false);
+        ani.SetBool("isRun", false);
+        ani.ResetTrigger("isHurt");
+        ani.SetBool("isGround", true); // Prevent getting stuck when dying in air
+        ani.SetFloat("yVelocity", 0);
+
+        rig.velocity = Vector2.zero;
+        rig.bodyType = RigidbodyType2D.Kinematic; 
+
+        // When dead, stop running sound (Speaker B)
+        if (runAudioSource.isPlaying) runAudioSource.Stop();
+
+        PlaySound(deathClip); // Death sound (Speaker A)
+
+        Debug.Log("Player died - Game Over");
+
+        StartCoroutine(RespawnCo());
+    }
+
+    #endregion
+
+    // Helper drawing (for viewing attack range and ground detection in Scene window)
     // public void OnDrawGizmos() {
     //     if (groundPoint != null) Gizmos.DrawWireSphere(groundPoint.position, 0.2f);
     //     if (attackPoint != null) Gizmos.DrawWireSphere(attackPoint.position, attackRange);
     // } 
-
 }

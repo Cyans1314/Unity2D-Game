@@ -1,31 +1,52 @@
+/*
+ * Script Name: Portal.cs
+ * Author:      Cyans
+ * Affiliation: Chang'an University
+ * Date:        November 15, 2025
+ * 
+ * Description: Level transition portal that checks for remaining enemies before
+ *              allowing teleportation. Includes fade-out effect and scene loading
+ *              with error handling.
+ */
+
 using System.Collections;
 using UnityEngine;
 using UnityEngine.SceneManagement; 
 
 public class Portal : MonoBehaviour
 {
-    [Header("关卡设置")]
-    [Tooltip("下一关的名字 要和Build Settings里的一样")]
+    #region --- Inspector Settings ---
+
+    [Header("Level Settings")]
+    [Tooltip("Next level name (must match Build Settings)")]
     public string nextSceneName = "Level2";
 
-    [Tooltip("传送前的等待时间 用来播放淡出效果")]
+    [Tooltip("Wait time before teleport (for fade effect)")]
     public float waitTime = 0.2f;
 
-    [Header("战斗检测")]
-    [Tooltip("把场景里的 Enemys 总父物体拖到这里")]
+    [Header("Combat Detection")]
+    [Tooltip("Drag the Enemys parent object from scene here")]
     public Transform enemiesParent;
 
-    // 防止重复触发
+    #endregion
+
+    #region --- Internal State ---
+
+    // Prevent repeated triggering
     private bool isTriggered = false; 
+
+    #endregion
+
+    #region --- Unity Lifecycle ---
 
     private void OnTriggerEnter2D(Collider2D other) {
         if (isTriggered) return;
         
         if (other.CompareTag("Player") || other.CompareTag("player")) {
             
-            // 进门前先检查是否还有活着的怪物
+            // Check if there are still living monsters before entering
             if (CheckEnemiesAlive()) {
-                Debug.Log("传送门未激活 还有怪物存活");
+                Debug.Log("Portal inactive - enemies still alive");
                 return;
             }
 
@@ -33,47 +54,51 @@ public class Portal : MonoBehaviour
         } 
     }
 
-    // 检查是否有怪物存活
+    #endregion
+
+    #region --- Portal Logic ---
+
+    // Check if there are living monsters
     private bool CheckEnemiesAlive() {
-        // 如果未绑定父物体 则默认放行
+        // If parent not bound, allow by default
         if (enemiesParent == null) return false;
 
-        // 获取子物体中所有的刚体组件
-        // 因为AttackPoint是空物体且没有刚体 所以不会被统计
-        // 只有活着的怪物会被统计进去
+        // Get all rigidbody components in children
+        // Because AttackPoint is empty object without rigidbody, it won't be counted
+        // Only living monsters will be counted
         Rigidbody2D[] remainingEnemies = enemiesParent.GetComponentsInChildren<Rigidbody2D>();
 
-        // 如果数量大于0 说明还有怪没死透
+        // If count > 0, means there are still monsters not fully dead
         if (remainingEnemies.Length > 0) {
-            Debug.Log("当前剩余怪物数量 " + remainingEnemies.Length);
+            Debug.Log("Remaining enemy count: " + remainingEnemies.Length);
             return true;
         } else {
             return false;
         }
     }
 
-    // 传送流程协程
+    // Teleport process coroutine
     private IEnumerator TeleportProcess(GameObject player) {
         isTriggered = true;
-        Debug.Log("检测到玩家 准备传送至 " + nextSceneName);
+        Debug.Log("Player detected, preparing to teleport to " + nextSceneName);
 
         Rigidbody2D rb = player.GetComponent<Rigidbody2D>();
         Animator ani = player.GetComponent<Animator>();
         SpriteRenderer sr = player.GetComponent<SpriteRenderer>();
 
-        // 冻结玩家物理状态
+        // Freeze player physics state
         if (rb != null) {
             rb.velocity = Vector2.zero; 
             rb.bodyType = RigidbodyType2D.Kinematic; 
         }
 
-        // 播放待机动画
+        // Play idle animation
         if (ani != null) {
             ani.SetBool("isRun", false); 
             ani.Play("Idle"); 
         }
 
-        // 玩家透明度渐变
+        // Player transparency fade
         float timer = 0f;
         while (timer < waitTime) {
             timer += Time.deltaTime;
@@ -84,16 +109,18 @@ public class Portal : MonoBehaviour
             yield return null; 
         }
 
-        // 加载场景
+        // Load scene
         if (Application.CanStreamedLevelBeLoaded(nextSceneName)) {
             SceneManager.LoadScene(nextSceneName);
         } else {
-            Debug.LogError("找不到场景 " + nextSceneName + " 请检查Build Settings");
+            Debug.LogError("Scene not found: " + nextSceneName + " - Please check Build Settings");
             isTriggered = false;
             
-            // 恢复玩家状态
+            // Restore player state
             if (rb != null) rb.bodyType = RigidbodyType2D.Dynamic;
             if (sr != null) sr.color = Color.white; 
         }
     }
+
+    #endregion
 }
